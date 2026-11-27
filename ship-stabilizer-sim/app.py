@@ -2497,7 +2497,10 @@ def live_panel():
     metric_cols[1].metric("선박 Pitch",f"{row.ship_pitch:+.2f}°")
     metric_cols[2].metric("상판 Roll",f"{row.plate_roll:+.2f}°")
     metric_cols[3].metric("상판 Pitch",f"{row.plate_pitch:+.2f}°")
-    metric_cols[4].metric("RMS비 (최근 30초)",f"{rr:.3f}",help="상판 RMS ÷ 선박 RMS, 롤·피치 평균. 0이면 완전 수평, 1이면 효과 없음")
+    _warm=(not actual_mode) and float(sim.get("t",0.0))<LIMIT_WARMUP_S and float(ki)>0
+    metric_cols[4].metric("RMS비 (최근 30초)"+(" · 수렴 중" if _warm else ""),f"{rr:.3f}",
+                          help="상판 RMS ÷ 선박 RMS, 롤·피치 평균. 0이면 완전 수평, 1이면 효과 없음. "
+                               f"켠 뒤 처음 {LIMIT_WARMUP_S:.0f}초는 자이로 바이어스 추정이 수렴하는 중이라 값이 크게 나옵니다(WMO 판정에서도 뺍니다).")
     info_line=""
     if actual_mode:
         idx=int(st.session_state["current_segment_idx"])
@@ -2546,7 +2549,7 @@ def live_panel():
         if actual_mode:
             st.caption("주의: INS 원자료는 1Hz입니다. 실시간 화면은 50Hz 제어 모델 입력을 위해 선형 보간했으며 실제 고주파 흔들림을 복원하지 않습니다.")
         else:
-            st.caption("가상 파도는 파도 경사 기반 단순화 모델이며 실선 RAO 모델이 아닙니다.")
+            st.caption("가상 파도: PM 스펙트럼 48성분 → 물리 기반 롤·피치 운동방정식(RAO). 계수는 Akademik 제원·실측 롤 주기로 맞췄고, 실선 수조시험 RAO는 아닙니다.")
     with b:
         st.plotly_chart(sensor_figure(plotted),width="stretch",key="sensor_live")
     st.download_button("현재 구간 시뮬레이션 CSV 저장",df.to_csv(index=False).encode("utf-8-sig"),
@@ -2800,7 +2803,7 @@ with st.expander("🌊 WMO 단계별 보정 한계 — 우리 장치는 몇 단�
         st.caption(("선박 흔들림 크기: " + ({"fit":"Akademik 실측 회귀식(실측 Hs 범위 밖은 외삽)","phys":f"물리 기반 운동방정식(롤 {PHYS_CO['T44']:.1f} s·ζ {PHYS_CO['z44']:.2f}, 피치 {PHYS_CO['T55']:.1f} s·ζ {PHYS_CO['z55']:.2f}, 선속 {PHYS_P['U_kn']:g} kn, 파향 45/90/135°)"}
                                             .get(lm_used,"이전 앱의 가정 배율(근거 없음 — 결론은 참고용)")))
                    + f" · 주기: Pierson–Moskowitz 완전발달 해역 관계 · 처음 {LIMIT_WARMUP_S:.0f}초(켠 직후 수렴 구간)는 판정에서 뺌"
-                   + " · 가상 파도는 실선 RAO가 아닌 파경사 기반 단순 모델입니다.")
+                   + " · 실선 수조시험 RAO가 아니라 제원·실측 롤 주기로 맞춘 운동방정식 결과입니다.")
 
     st.markdown("#### ② 실측 항해 데이터 기준 (Akademik INS, WMO 라벨별)")
     if not _pack:
