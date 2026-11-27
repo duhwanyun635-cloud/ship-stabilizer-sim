@@ -295,8 +295,10 @@ def rao_curves(p: dict, beta_deg: float, periods, co: dict | None = None) -> dic
     b = math.radians(beta_deg); U = p.get("U_kn", 0.0)*0.514444
     we = np.maximum(np.abs(w + k*U*math.cos(b)), 1e-3)
     att = np.exp(-k*p["T"])
-    fr = math.sin(b)*box_factor(k*abs(math.sin(b))*p["B"]/2)*att
-    fp = math.cos(b)*box_factor(k*abs(math.cos(b))*p["L"]/2)*att
+    sb, cb = math.sin(b), math.cos(b)
+    sb, cb = (0.0 if abs(sb) < 1e-12 else sb), (0.0 if abs(cb) < 1e-12 else cb)   # 90°에서 cos = 6e-17 같은 반올림 찌꺼기 제거
+    fr = sb*box_factor(k*abs(sb)*p["B"]/2)*att
+    fp = cb*box_factor(k*abs(cb)*p["L"]/2)*att
     r = np.abs(fr*rao(we, co["w44"], co["z44"])); q = np.abs(fp*rao(we, co["w55"], co["z55"]))
     return {"T": T, "Te": 2*np.pi/we, "roll_per_slope": r, "pitch_per_slope": q,
             "roll_per_amp": np.degrees(r*k), "pitch_per_amp": np.degrees(q*k)}

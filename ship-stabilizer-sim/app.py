@@ -2232,10 +2232,12 @@ sb.caption(f"물리 모델: 롤 고유주기 {PHYS_CO['T44']:.1f} s (실측 13.5
 sb.header("제어 파라미터")
 with sb.expander("FF + PD + 상보필터",expanded=True):
     ff=st.slider("선행 보정 FF",0.0,1.2,1.0,0.01,key="param_ff")
-    kp=st.slider("P 이득 Kp",0.0,4.0,1.5,0.01,key="param_kp")
-    kd=st.slider("D 이득 Kd(s)",0.0,0.30,0.05,0.005,key="param_kd")
-    alpha=st.slider("상보필터 계수 α (20ms 기준)",0.90,0.999,0.99,0.001,format="%.3f",key="param_alpha")
-    ki=st.slider("자이로 바이어스 추정 kᵢ (1/s²)",0.0,0.02,0.0,0.001,format="%.3f",key="param_ki",
+    # 기본값 = 'WMO 6 설정' (MPU-9250 + DS51150 에서 WMO 6 을 통과하는 조합. 바이어스 추정을 끄면 잔잔한 바다에서
+    #          자이로 바이어스 때문에 상판이 선박보다 더 기울 수 있음 — Hs 1.9 m: 선박 0.66° vs 상판 0.76°)
+    kp=st.slider("P 이득 Kp",0.0,4.0,1.27,0.01,key="param_kp")
+    kd=st.slider("D 이득 Kd(s)",0.0,0.30,0.02,0.005,key="param_kd")
+    alpha=st.slider("상보필터 계수 α (20ms 기준)",0.90,0.999,0.998,0.001,format="%.3f",key="param_alpha")
+    ki=st.slider("자이로 바이어스 추정 kᵢ (1/s²)",0.0,0.02,0.005,0.001,format="%.3f",key="param_ki",
                  help="0이면 끔. 켜면 상보필터가 자이로 바이어스를 스스로 추정해 뺍니다(PI형 상보필터, Mahony 외 2005 부록 A 식 22·23). "
                       "바이어스 오차가 사라지므로 α를 더 크게(자이로를 더 믿게) 해서 가속도 오염을 줄일 수 있습니다. 켠 뒤 수렴에 약 20~40초.")
     def _apply_recommended():
@@ -2672,7 +2674,7 @@ with st.expander("🚢 물리 기반 선박 운동 모델 — 계수·검증·�
         r_,p_=phys.rms_expected(0.5*(lo+hi),tpm,0.0,_P,headings=range(0,360,30)); _rp.append((r_,p_)); _mm.append((rm,pm))
     _err=np.mean([abs(math.log(a/b)) for (a,_),(b,_) in zip(_rp,_mm)])
     q1,q2,q3,q4=st.columns(4)
-    q1.metric("롤 고유주기 (모델 / 실측)",f"{_co['T44']:.1f} / {_M['roll_period_s']} s")
+    q1.metric(f"롤 고유주기 (실측 {_M['roll_period_s']} s)",f"{_co['T44']:.1f} s")
     q2.metric("자유감쇠 시험 ζ (대수감쇠율)",f"{_zd:.3f}",help=f"감쇠 주기 {_Td:.2f} s. 입력 ζ44 {_co['z44']:.3f}와 같아야 정상")
     q3.metric("긴 파도에서 롤/파경사",f"{_long:.3f}",help="파장이 아주 길면 선박이 수면 기울기를 그대로 따라가야 하므로 1에 가까워야 정상")
     q4.metric("롤 RMS 평균 오차 (Hs 4구간)",f"{(math.exp(_err)-1)*100:.0f}%",help="실측 30분 블록 중앙값 대비 모델(선속·파향 평균) — 로그 오차의 평균")
@@ -2683,7 +2685,8 @@ with st.expander("🚢 물리 기반 선박 운동 모델 — 계수·검증·�
     # ③ RAO와 민감도
     st.markdown("##### ③ 주파수 응답 (관성·복원·감쇠를 바꿨을 때)")
     r1,r2=st.columns([1,1.4])
-    _beta=r1.select_slider("RAO 파향 (선수에서, °)",[0,30,45,60,90,120,135,150,180],value=90,key="phys_rao_beta")
+    _beta=r1.select_slider("RAO 파향 (선수에서, °)",[0,30,45,60,90,120,135,150,180],value=45,key="phys_rao_beta",
+                           help="0°(선수)는 피치만, 90°(정횡)는 롤만 생깁니다. 45°에서는 둘 다 보입니다.")
     _sens=r2.radio("민감도 곡선",["관성","복원","감쇠"],horizontal=True,key="phys_rao_sens")
     _Tg=np.linspace(4,25,160); _fr=go.Figure(); _fq=go.Figure()
     for m_,dash in ((0.5,"dot"),(1.0,"solid"),(2.0,"dash")):
@@ -2721,8 +2724,9 @@ with st.expander("🚢 물리 기반 선박 운동 모델 — 계수·검증·�
     _ft.update_layout(height=300,margin=dict(l=10,r=10,t=30,b=10),xaxis_title="시간(s)",yaxis_title="각도(°)",legend=dict(orientation="h",y=-0.25))
     st.plotly_chart(_ft,width="stretch",key="phys_cmp_time")
     st.dataframe(pd.DataFrame(_rows2).round(2),hide_index=True,width="stretch")
-    st.caption("이전 모델은 파도 기울기를 그대로 배율만 곱해서 롤 주기가 파도 주기를 따라갑니다. 물리 모델은 선박 고유주기(13.5 s) 근처가 증폭되고 "
-               "짧은 파도는 관성 때문에 걸러져서, 실측처럼 롤 주기가 파도 주기와 상관없이 13~14 s 근처로 모입니다.")
+    st.caption("이전 모델은 파도 기울기에 배율만 곱해서 짧은 파도까지 그대로 따라갑니다. 물리 모델은 롤 고유주기(13.5 s) 근처 성분을 증폭하고 "
+               "선체보다 짧은 파도는 관성 때문에 걸러냅니다. 그래서 파도가 짧고 선수 쪽에서 오면(기본값 Hs 1.9 m·25°) 거의 흔들리지 않고, "
+               "정횡·긴 파도일수록 크게 흔들립니다. 실측(30분 블록)에서 롤 스펙트럼 첨두가 13~14 s에 모이는 것과 같은 성질입니다.")
     # ⑤ Hs·Tp 변화에 따른 응답
     st.markdown("##### ⑤ 파고·주기 변화에 따른 응답")
     _hsg=np.array([0.3,0.875,1.875,3.25,5.0,7.5,11.5]); _ph=[phys.rms_expected(h,pm_tp(h),0.0,_P,headings=range(0,360,30)) for h in _hsg]
