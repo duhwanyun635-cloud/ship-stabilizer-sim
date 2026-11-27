@@ -2154,8 +2154,7 @@ HW_PRESETS={  # 다음 학기 부품 데이터시트 기반 (근거는 앱 '계�
     # 구매한 센서: GY-9250 모듈의 MPU-9250 = MPU-6500(자이로·가속도 다이) + AK8963 지자계.
     # PS-MPU-9250A-01 Rev 1.1: 자이로 Total RMS Noise 0.1 º/s-rms(92 Hz), ZRO 온도 변화 ±30 º/s(−40~+85°C → 약 ±0.24 º/s/°C),
     #   가속도 노이즈 300 µg/√Hz (8·9쪽). 지자계는 방위(요)용이라 롤·피치 수평유지에는 쓰지 않는다.
-    "MPU-9250 + DS51150":   dict(gyro_noise=0.1,gyro_bias=0.3,acc_noise=0.2),
-    "ICM-42688-P + DS51150":dict(gyro_noise=0.1,gyro_bias=0.1,acc_noise=0.1)}
+    "MPU-9250 + DS51150":   dict(gyro_noise=0.1,gyro_bias=0.3,acc_noise=0.2)}
 def _apply_hw(name):
     v=HW_PRESETS[name]
     st.session_state.update({"fixed_tau":0.10,"fixed_rate":230,"fixed_limit":15.0,"sensor_gyro_noise":v["gyro_noise"],
@@ -2163,11 +2162,8 @@ def _apply_hw(name):
                              "servo_choice":"1차 지연 (정확 이산화)","delay_ms":20})
 with sb.expander("서보 및 센서 고정 조건",expanded=False):
     st.caption("부품 프리셋 (서보 DS51150 12V: 230°/s·±15°·τ 0.10 s, 지연 20 ms, 가속도 오염 1°)")
-    _h1,_h2=st.columns(2)
-    _h1.button("MPU-9250 (구매품)",on_click=_apply_hw,args=("MPU-9250 + DS51150",),key="btn_hw_mpu",width="stretch",
-               help="GY-9250 모듈. 자이로 노이즈 0.1°/s · 바이어스 0.3°/s(ZRO 온도 변화 ±30°/s/125°C ≈ ±0.24°/s/°C, 켠 뒤 약 1°C 변화 가정) · 가속도계 0.2°")
-    _h2.button("ICM-42688-P",on_click=_apply_hw,args=("ICM-42688-P + DS51150",),key="btn_hw_icm",width="stretch",
-               help="자이로 노이즈 0.1°/s · 바이어스 0.1°/s(온도계수 ±5 mdps/°C에 여유) · 가속도계 0.1°")
+    st.button("MPU-9250(GY-9250) + DS51150 값으로 되돌리기",on_click=_apply_hw,args=("MPU-9250 + DS51150",),key="btn_hw_mpu",width="stretch",
+              help="자이로 노이즈 0.1°/s · 바이어스 0.3°/s(ZRO 온도 변화 ±30°/s/125°C ≈ ±0.24°/s/°C, 켠 뒤 약 1°C 변화 가정) · 가속도계 0.2°")
     tau=st.slider("서보 응답 시간상수 τ(s)",0.02,0.4,0.10,0.01,key="fixed_tau")
     rate=st.slider("서보 최대 각속도(°/s)",50,600,230,10,key="fixed_rate",help="기본값 = DS51150 12V (0.21 s/60° 무부하 → 부하 80% 가정)")
     limit=st.slider("서보 회전 한계(±°)",5.0,30.0,15.0,1.0,key="fixed_limit")
@@ -2176,10 +2172,9 @@ with sb.expander("서보 및 센서 고정 조건",expanded=False):
                         help="켤 때 정지 보정을 한 뒤에도 남는 바이어스(주로 온도 변화 × 온도계수). 데이터시트의 ZRO 온도계수로 정합니다.")
     acc_noise=st.slider("가속도계 환산각 노이즈(°)",0.0,3.0,0.2,0.05,key="sensor_acc_noise",help="기본값 = MPU-9250 300 µg/√Hz(≈0.1°)에 배 진동 여유 2배")
     accel_disturb=st.slider("추가 가속도 오염 진폭(°)",0.0,5.0,0.0,0.1,key="sensor_acc_disturb")
-    servo_choice=st.radio("서보 모델",["1차 지연 (정확 이산화)","2차 (상판·적재물 관성 포함)","기존 앱 결과 재현"],index=0,key="servo_choice",
-                          help="기존 앱 결과 재현: 이전 버전의 오일러 근사 서보와 기록 방식(관절각[k+1]+선박각[k])을 그대로 써서 0.497·0.383 같은 이전 숫자를 다시 얻을 때만 사용")
+    servo_choice=st.radio("서보 모델",["1차 지연 (정확 이산화)","2차 (상판·적재물 관성 포함)"],index=0,key="servo_choice")
     servo2=servo_choice.startswith("2차")
-    legacy_mode=servo_choice.startswith("기존")
+    legacy_mode=False   # '기존 앱 결과 재현'(오일러 근사)은 UI에서 제거 — 엔진에는 남겨 verify_engine V11/V13 에서만 사용
     servo_fn=st.slider("2차 모델 고유진동수 fn(Hz)",1.0,8.0,3.0,0.5,key="servo_fn",disabled=not servo2)
     servo_zeta=st.slider("2차 모델 감쇠비 ζ",0.05,1.0,0.3,0.05,key="servo_zeta",disabled=not servo2)
     delay_ms=st.select_slider("센서→구동 지연(ms)",[0,20,40,60,80,100],value=20,key="delay_ms",disabled=legacy_mode,
@@ -2240,16 +2235,9 @@ with sb.expander("FF + PD + 상보필터",expanded=True):
     ki=st.slider("자이로 바이어스 추정 kᵢ (1/s²)",0.0,0.02,0.005,0.001,format="%.3f",key="param_ki",
                  help="0이면 끔. 켜면 상보필터가 자이로 바이어스를 스스로 추정해 뺍니다(PI형 상보필터, Mahony 외 2005 부록 A 식 22·23). "
                       "바이어스 오차가 사라지므로 α를 더 크게(자이로를 더 믿게) 해서 가속도 오염을 줄일 수 있습니다. 켠 뒤 수렴에 약 20~40초.")
-    def _apply_recommended():
-        st.session_state.update({"param_ff":1.0,"param_kp":1.27,"param_kd":0.02,"param_alpha":0.987,"param_ki":0.0})
-    def _apply_initial():
-        st.session_state.update({"param_ff":1.0,"param_kp":1.5,"param_kd":0.05,"param_alpha":0.99,"param_ki":0.0})
     def _apply_wmo6():
         st.session_state.update({"param_ff":1.0,"param_kp":1.27,"param_kd":0.02,"param_alpha":0.998,"param_ki":0.005})
-    _b1,_b2=st.columns(2)
-    _b1.button("발표 추천값",on_click=_apply_recommended,key="btn_reco",help="FF 1.0 · Kp 1.27 · Kd 0.02 · α 0.987 · kᵢ 0 (바이어스 추정 끔)")
-    _b2.button("초기값",on_click=_apply_initial,key="btn_init",help="FF 1.0 · Kp 1.5 · Kd 0.05 · α 0.99 · kᵢ 0")
-    st.button("WMO 6 설정 (바이어스 추정 켬)",on_click=_apply_wmo6,key="btn_wmo6",width="stretch",
+    st.button("제품 설정으로 되돌리기 (WMO 6 목표)",on_click=_apply_wmo6,key="btn_wmo6",width="stretch",
               help="FF 1.0 · Kp 1.27 · Kd 0.02 · α 0.998 · kᵢ 0.005 — 부품 교체 없이 MPU-9250(구매품)으로 WMO 6을 목표로 한 설정")
 SERVO["ki"]=float(ki)   # 추정기 설정도 모든 평가(실시간·튜닝·한계 분석)에 같이 넘긴다
 
@@ -2340,27 +2328,6 @@ if actual_mode:
             f"연속 재생 구간 {len(manifest):,}개 · 파랑 기록 {len(wave_df):,}개"
         )
 
-        with st.expander("🔁 코드를 고칠 때마다 다시 받지 않게 하기 (한 번만 하면 됨)",expanded=False):
-            st.markdown(
-                "Streamlit Cloud처럼 코드를 올릴 때마다 서버가 새로 만들어지는 환경에서는 캐시가 지워져서 647MB를 다시 받게 됩니다. "
-                "아래 버튼으로 **롤·피치·시각만 뽑은 경량 파일**을 만들어 내려받은 뒤, 압축을 풀어 GitHub 저장소의 `data/` 폴더에 "
-                "`app.py`와 함께 올리세요. 그다음부터는 앱이 `data/`를 바로 읽어 **다운로드를 하지 않습니다**.\n\n"
-                "부분 파일은 하나당 약 10~15MB라 GitHub 웹 업로드(파일당 25MB 한도)로도 올릴 수 있습니다. "
-                "선수방향·속도 열은 화면 표시용이라 빼고, 계산에 쓰는 롤·피치·시각만 담습니다(시각 0.01초, 각도 float32).")
-            if st.button("경량 데이터 파일 만들기",key="build_compact"):
-                try:
-                    pbar_c=st.progress(0.0,text="경량 파일 만드는 중")
-                    files=build_compact(archive_path,manifest,pbar_c)
-                    st.success("완료: "+", ".join(f"{f.name} ({f.stat().st_size/1e6:.1f}MB)" for f in files if f.exists()))
-                    st.session_state["compact_ready"]=True
-                except Exception as exc:
-                    st.error(f"경량 파일 만들기 실패: {type(exc).__name__}: {exc}")
-            if st.session_state.get("compact_ready") and DATA_DIR.exists():
-                st.download_button("data 폴더 내려받기 (zip)",compact_zip_bytes(),file_name="akademik_data_folder.zip",
-                                   mime="application/zip",key="dl_compact")
-                st.caption("⚠️ 이 zip 파일 자체를 GitHub에 올리면 25MB를 넘어 실패합니다. 반드시 압축을 풀고, 나온 `data/` 폴더를 저장소 맨 위(app.py 옆)에 올리세요. "
-                           "파일이 많거나 커서 실패하면 조각 파일을 몇 개씩 나눠서 여러 번 올려도 됩니다.")
-
     labels=[f"{i+1}/{len(manifest)} · {pd.Timestamp(d['start']).strftime('%Y-%m-%d %H:%M:%S')} UTC · {d['rows']:,} samples · {Path(d['member']).name}" for i,d in enumerate(manifest)]
     start_idx=sb.selectbox("처음 재생할 항해 구간",range(len(manifest)),format_func=lambda i:labels[i],index=0,key="actual_start_idx")
     auto_advance=sb.checkbox("구간 종료 시 다음 항해 기록 자동 재생",value=True,key="auto_advance")
@@ -2403,29 +2370,12 @@ else:
         sea["direction"]=sb.slider("파도 방향(°)",0,360,int(sea["direction"]),5,key="virtual_dir",
                                    help="선수에서 잰 파향: 0° = 선수 정면(맞바람 파도), 90° = 정횡, 180° = 선미(뒤에서 오는 파도)")
         sea_name=f"직접 설정 (WMO {classify_sea_state(sea['Hs'])[0]})"
-    _fit=(fit_tilt_power(st.session_state["tune_pack"]["items"]) if st.session_state.get("tune_pack") else None) or AKADEMIK_FIT
-    motion_model=sb.radio("선박 운동 모델",["물리 기반 운동방정식 (관성·복원·감쇠·파랑 외력)","실측 회귀식 RMS = c·Hsᵖ (이전)","가정 배율 (이전 앱)"],index=0,key="motion_model",
-                          help="물리 기반: (I+A)φ''+Bφ'+Cφ=M(t) 를 Roll·Pitch 각각 풉니다(계수는 '선박 운동 물리 계수'). "
-                               "실측 회귀식·가정 배율: 파도 기울기에 배율을 곱하는 이전 방식(비교용).")
-    motion_model_key="phys" if motion_model.startswith("물리") else ("fit" if motion_model.startswith("실측") else "assumed")
-    if motion_model_key=="fit":
-        fc=sb.number_input("c (°/mᵖ)",0.0,20.0,float(_fit["c"]),0.001,format="%.3f",key="fit_c")
-        fp=sb.number_input("p",0.0,3.0,float(_fit["p"]),0.001,format="%.3f",key="fit_p")
-        sb.caption(("저장된 Akademik 실측 맞춤값" if _fit.get("saved") else "지금 준비한 관찰 구간으로 맞춘 값")
-                   + f": c={_fit['c']:.3f}, p={_fit['p']:.3f}, 관찰 구간 {_fit['n']}개, R²={_fit['r2']:.2f}, 실측 Hs {_fit['hs_min']:.2f}~{_fit['hs_max']:.2f} m (밖은 외삽)")
-    else:
-        fc,fp=1.0,0.5
-    if motion_model_key=="phys":
-        sea["gain"]=1.0 if sea["Hs"]>0 else 0.0
-    else:
-        sea["gain"]=virtual_gain_for(sea["Hs"])*motion_mult(sea["Hs"],sea["Tp"],motion_model_key,fc,fp) if sea["Hs"]>0 else 0.0
-    gain=sb.slider("흔들림 크기 배율",0.25,2.0,1.0,0.05,key="virtual_gain",help="물리 모델에서는 1이 계산 그대로입니다(1이 아니면 '가정'이 됩니다).")
-    if motion_model_key=="phys":
-        comps=phys.wave_components_phys(sea["Tp"],sea["Hs"],PHYS_COMPONENTS)
-        PHYS_TERMS=phys.component_terms(comps,sea["direction"],PHYS_P,PHYS_CO)
-    else:
-        comps=wave_components(sea["Tp"],sea["Hs"],sea["components"])
-        PHYS_TERMS=None
+    # 제품 기준: 선박 운동은 물리 기반 운동방정식만 사용 (가정 배율·실측 회귀식·흔들림 배율 제거)
+    motion_model_key="phys"; fc,fp=1.0,0.5; gain=1.0
+    sea["gain"]=1.0 if sea["Hs"]>0 else 0.0
+    sb.caption("선박 운동: 물리 기반 운동방정식 (I+A)φ''+Bφ'+Cφ=M(t) — 계수는 '선박 운동 물리 계수'")
+    comps=phys.wave_components_phys(sea["Tp"],sea["Hs"],PHYS_COMPONENTS)
+    PHYS_TERMS=phys.component_terms(comps,sea["direction"],PHYS_P,PHYS_CO)
     playback_speed=sb.slider("재생 배속",0.25,20.0,1.0,0.25,key="virtual_speed")
     refresh=sb.select_slider("화면 갱신 간격(s)",[0.15,0.25,0.4,0.6,0.8,1.0,1.5,2.0,3.0],value=0.25,key="refresh_virtual",
                              help="깜빡이면 늘리세요. 간격을 늘려도 재생 배속(시뮬레이션 시간)은 그대로이고, 화면만 덜 자주 바뀝니다.")
@@ -2797,15 +2747,8 @@ with st.expander("🌊 WMO 단계별 보정 한계 — 우리 장치는 몇 단�
     st.markdown("#### ① 가상 해상상태 기준")
     v1,v2=st.columns([1.3,1])
     sweep=v1.radio("바꿀 변수",["WMO 0~9 대표값 (Hs 구간 가운데, Tp=PM)","Hs 촘촘히 0.25~16 m (Tp=PM)","Hs만 변경 (Tp 고정)","Tp만 변경 (Hs 고정)"],key="lim_sweep")
-    lim_model=v2.radio("선박 흔들림 크기",["물리 기반 운동방정식","실측 회귀식 c·Hsᵖ","가정 배율 (이전 앱)"],index=0,key="lim_model",
-                       help="물리 기반: 실현마다 파향 45°·90°·135°(선수 사파·정횡·선미 사파)로 바꿔 평가. 계수는 사이드바 '선박 운동 물리 계수'.")
-    lm_key="phys" if lim_model.startswith("물리") else ("fit" if lim_model.startswith("실측") else "assumed")
-    lc_=float(st.session_state.get("fit_c",_fit["c"])); lp_=float(st.session_state.get("fit_p",_fit["p"]))
-    if _fit_live and "fit_c" not in st.session_state:
-        lc_,lp_=_fit_live["c"],_fit_live["p"]
-    if lm_key=="fit":
-        v2.caption(f"c={lc_:.3f}, p={lp_:.3f}" + (" (저장된 Akademik 실측 맞춤값" if _fit.get("saved") else " (지금 준비한 실측 관찰 구간")
-                   + f" {_fit['n']}개, R²={_fit['r2']:.2f}, Hs {_fit['hs_min']:.2f}~{_fit['hs_max']:.2f} m 밖은 외삽)")
+    lm_key="phys"; lc_,lp_=_fit["c"],_fit["p"]   # 제품 기준: 물리 기반 운동방정식만
+    v2.caption("선박 흔들림: 물리 기반 운동방정식 · 실현마다 파향 45°·90°·135°(선수 사파·정횡·선미 사파)")
     v3,v4,v5=st.columns(3)
     n_real=v3.number_input("조건당 파도 실현 수",1,10,3,1,key="lim_nreal")
     dur=v4.number_input("조건당 길이(s)",120,900,300,30,key="lim_dur",help=f"처음 {LIMIT_WARMUP_S:.0f}초는 필터·바이어스 추정 수렴 구간이라 판정에서 뺍니다.")
@@ -2921,7 +2864,7 @@ def tuning_options(prefix: str, expanded=False):
         kd_max=float(st.select_slider("Kd 탐색 상한",[0.06,0.09,0.12,0.2,0.3],value=0.12,key=f"{prefix}_kdmax"))
         set_kd_max(kd_max)
         st.caption(f"탐색 범위: FF {TUNE_BOUNDS['ff']}, Kp {TUNE_BOUNDS['kp']}, Kd {TUNE_BOUNDS['kd']}, α {TUNE_BOUNDS['alpha']}. "
-                   f"Kd 상한 기본값 0.12는 서보 1차 모델의 안정 경계(기본 τ에서 약 0.07~0.08) 바로 위입니다. 서보 2차 모델에서는 ⑦ D 게인 비교와 ④ 격자로 경계를 확인한 뒤 상한을 올리세요. "
+                   f"Kd 상한 기본값 0.12는 서보 1차 모델의 안정 경계(기본 τ에서 약 0.07~0.08) 바로 위입니다. 서보 2차 모델에서는 ⑥ D 게인 비교와 ④ 격자로 경계를 확인한 뒤 상한을 올리세요. "
                    "제약 조건 방식은 자세 RMS비를 최소화하고 포화율 >1% 또는 리밋사이클이면 큰 페널티를 줍니다. "
                    "가중합 방식은 0.45·RMS비 + 0.20·95% 잔차비 + 0.15·최대각비 + 0.05·(각속도 RMS + 각가속도 RMS + 2Hz 이상 비율 + 포화율)입니다.")
     return {"case":case,"case_fixed":CASES[case],"objective":objective,"seed":seed,"kd_log":kd_log,"n_valid_seeds":n_vs}
@@ -3025,7 +2968,7 @@ if actual_mode:
         st.caption("서보 τ·최대 각속도·회전한계와 센서 노이즈/바이어스 설정은 최적화 중 고정했습니다. 이 고정값이 실제 하드웨어 사양과 측정치가 아니면 추천값의 신뢰도가 낮아집니다.")
 
     st.subheader("튜닝 분석")
-    t1,t2,t3,t4,t5,t6,t7=st.tabs(["① 수렴·재현성","② 전체 후보·파레토","③ 안정성 검사","④ Kp×Kd 격자·민감도","⑤ 해상상태별 튜닝","⑥ 관찰 구간 목록·분포","⑦ D 게인 비교"])
+    t1,t2,t3,t4,t6,t7=st.tabs(["① 수렴·재현성","② 전체 후보·파레토","③ 안정성 검사","④ Kp×Kd 격자·민감도","⑤ 관찰 구간 목록·분포","⑥ D 게인 비교"])
 
     # ---------------------------------------------------------------- ① convergence & reproducibility
     with t1:
@@ -3184,85 +3127,6 @@ if actual_mode:
             st.plotly_chart(fig,width="stretch",key="sens_fig")
             st.download_button("민감도 CSV 저장",sd.to_csv(index=False).encode("utf-8-sig"),file_name="sensitivity.csv",mime="text/csv",key="dl_sens")
 
-    # ---------------------------------------------------------------- ⑤ sea-state tuning
-    with t5:
-        st.caption(HS_NOTE)
-        crit=st.radio("조건 구간 기준",["A. WMO 해상상태 코드별","B. Tp 구간별","C. Hs(WMO) × Tp 2차원","D. 하부 IMU 직전 기울기 RMS 구간"],key="bin_crit")
-        b1,b2,b3=st.columns(3)
-        e1=b1.slider("Tp 경계 1(s)",3.0,20.0,TP_DEFAULT_EDGES[0],0.5,key="tp_e1")
-        e2=b2.slider("Tp 경계 2(s)",3.0,20.0,TP_DEFAULT_EDGES[1],0.5,key="tp_e2")
-        e3=b3.slider("Tp 경계 3(s)",3.0,20.0,TP_DEFAULT_EDGES[2],0.5,key="tp_e3")
-        tp_edges=sorted({e1,e2,e3})
-        st.caption("Tp 구간: " + " / ".join(tp_label(b,tp_edges) for b in range(len(tp_edges)+1)))
-        d1,d2=st.columns(2)
-        prior_min=d1.slider("기준 D: 직전 이동 RMS 시간(분)",2,5,3,1,key="prior_min")
-        prior_txt=d2.text_input("기준 D: 기울기 RMS 경계(°, 쉼표 구분)",PRIOR_DEFAULT_EDGES,key="prior_edges")
-        m1,m2,m3,m4=st.columns(4)
-        min_tr=int(m1.number_input("구간 최소 학습용 관찰 구간",1,50,6,1,key="bin_min_tr"))
-        min_va=int(m2.number_input("구간 최소 검증용 관찰 구간",1,20,2,1,key="bin_min_va"))
-        bin_rep=int(m3.slider("오차막대용 시드 반복",1,5,3,1,key="bin_rep"))
-        bin_trials=int(m4.slider("구간별 탐색 후보 수",16,60,24,4,key="bin_trials"))
-        st.caption("기준 D는 장치가 Hs/Tp를 직접 측정하지 못하므로, 하부 IMU가 측정할 수 있는 직전 기울기 RMS(√(roll²+pitch²), INS 기록 기준)로 구간을 나눕니다. "
-                   "직전 자료가 부족한 관찰 구간(구간 시작부 관찰 구간)은 제외됩니다. 파랑 자료가 없는 관찰 구간은 A~C 구간 분석에서 제외되지만 전체 성능 평가에는 포함됩니다.")
-        if pack:
-            try:
-                prior_edges=parse_edges(prior_txt)
-                keys,info=assign_bins(pack["items"],crit,tp_edges,prior_min,prior_edges)
-                gid,ginfo,log=merge_bins(keys,info,pack["items"],min_tr,min_va)
-                prev=pd.DataFrame([{"구간":g["label"],"학습용 관찰 구간":g["n_train"],"검증용 관찰 구간":g["n_valid"],"분석 가능":"예" if g["enough"] else "아니오(최소 개수 미달)"} for g in ginfo])
-                if crit.startswith("A"):
-                    present={k[1] for k in info}
-                    missing=[{"구간":wmo_label(c),"학습용 관찰 구간":0,"검증용 관찰 구간":0,"분석 가능":"자료 없음"} for c,_,_,_ in WMO_CODES if c not in present]
-                    prev=pd.concat([prev,pd.DataFrame(missing)],ignore_index=True)
-                excluded=sum(1 for k in keys if k is None)
-                st.markdown(f"**구간 미리보기** (제외된 관찰 구간 {excluded}개)")
-                st.dataframe(prev,hide_index=True,width="stretch")
-                for line in log: st.caption("병합: "+line)
-            except Exception as exc:
-                st.error(f"구간 설정 오류: {exc}")
-                gid=None
-        else:
-            st.info("자동 튜닝 또는 ⑥ 탭의 '관찰 구간 준비'를 먼저 실행하면 구간 미리보기가 나타납니다.")
-            gid=None
-        if st.button("해상상태별 튜닝 실행",key="run_bins"):
-            try:
-                pk=get_pack()
-                prior_edges=parse_edges(prior_txt)
-                keys,info=assign_bins(pk["items"],crit,tp_edges,prior_min,prior_edges)
-                gid,ginfo,log=merge_bins(keys,info,pk["items"],min_tr,min_va)
-                bar=st.progress(0.0)
-                br=run_bin_analysis(pk["items"],gid,ginfo,current,fixed,opts["objective"],opts["case_fixed"],opts["kd_log"],
-                                    bin_trials,bin_rep,opts["seed"],lambda f,m: bar.progress(min(f,1.0),text=m))
-                br["criterion"]=crit; br["merge_log"]=log; br["case"]=opts["case"]
-                st.session_state["bin_result"]=br
-            except Exception as exc:
-                st.error(f"해상상태별 튜닝 오류: {type(exc).__name__}: {exc}")
-        br=st.session_state.get("bin_result")
-        if br:
-            st.markdown(f"**구간별 최적 게인** · 기준 {br['criterion']} · 케이스 {br['case']} · 목적함수 {br['objective']}")
-            for line in br["merge_log"]: st.caption("병합: "+line)
-            st.dataframe(br["table"].round(4),hide_index=True,width="stretch")
-            for line in br["summary"]: st.info(line)
-            st.plotly_chart(heatmap(br["J"],br["labels"],br["gain_names"],"전이 행렬 J(g_i, 구간 j): 행 게인을 열 구간 검증용 관찰 구간에 적용한 점수","점수",text_fmt=".3f"),width="stretch",key="bin_J")
-            st.plotly_chart(heatmap(100*br["regret"],br["labels"],br["gain_names"],"regret(i→j) = J(g_i, j) / J(g_j*, j) − 1 (%)","regret(%)",zmin=0,text_fmt=".1f",colorscale="Reds"),width="stretch",key="bin_regret")
-            reg_df=pd.DataFrame(100*br["regret"],index=br["gain_names"],columns=br["labels"])
-            st.dataframe(reg_df.round(2),width="stretch")
-            xsel=st.radio("게인–해상상태 그래프 x축",["Hs 평균(m)","Tp 평균(s)"],horizontal=True,key="bin_xaxis")
-            tb=br["table"]
-            fig=make_subplots(rows=1,cols=3,subplot_titles=["Kp","Kd","FF"])
-            for i,(k,e) in enumerate((("Kp","Kp 시드 표준편차"),("Kd","Kd 시드 표준편차"),("FF","FF 시드 표준편차")),1):
-                fig.add_trace(go.Scatter(x=tb[xsel],y=tb[k],error_y=dict(type="data",array=tb[e]),mode="markers+text",text=tb["구간"].str.slice(0,10),
-                                         textposition="top center",marker=dict(size=10,color=PLATE_COLOR),showlegend=False),row=1,col=i)
-            fig.update_layout(height=360,margin=dict(l=10,r=10,t=40,b=10),title="구간 대표값 vs 최적 게인 (오차막대: 시드 반복 표준편차)")
-            st.plotly_chart(fig,width="stretch",key="bin_gain_fig")
-            st.markdown("**공통 게인 vs 조건별 게인** (각 칸: 검증 RMS비 · 포화율 · regret)")
-            st.dataframe(br["comparison"].round(3),hide_index=True,width="stretch")
-            st.caption("공통 게인: " + " / ".join(f"{n}: {fmt_params(p)}" for n,p in br["common"].items()))
-            c_a,c_b=st.columns(2)
-            c_a.download_button("구간별 게인 CSV",br["table"].to_csv(index=False).encode("utf-8-sig"),file_name="gains_by_sea_state.csv",mime="text/csv",key="dl_bins")
-            c_b.download_button("공통 vs 조건별 비교 CSV",br["comparison"].to_csv(index=False).encode("utf-8-sig"),file_name="common_vs_binned.csv",mime="text/csv",key="dl_bincomp")
-            st.caption(HS_NOTE+" ACE 자료는 특정 해역·기간의 기록이라 일부 WMO 코드는 자료가 없습니다.")
-
     # ---------------------------------------------------------------- ⑥ windows & distribution
     with t6:
         if st.button("관찰 구간 준비",key="prep_pack"):
@@ -3381,77 +3245,6 @@ if actual_mode:
                                    file_name="kd_comparison.csv",mime="text/csv",key="dl_kd")
             else:
                 st.download_button("계단 응답 지표 CSV",kr["step"].to_csv(index=False).encode("utf-8-sig"),file_name="kd_step.csv",mime="text/csv",key="dl_kd_step")
-
-    with st.expander("실시간 재생과 자동 튜닝 평가의 일치 검증 (consistency_check)", expanded=False):
-        st.write("현재 재생 중인 항해 구간에서 관찰 구간과 같은 방식으로 관찰 구간을 뽑아, 같은 파라미터·같은 노이즈 시드로 "
-                 "① 자동 튜닝 평가 경로(simulate_batch)와 ② 실시간 재생 경로(actual_motion_at + control_step)를 각각 돌립니다. "
-                 f"RMS는 live_performance와 같은 식으로 계산하며 차이가 {100*CONSISTENCY_TOL:.0f}% 이내면 통과입니다.")
-        cc1,cc2=st.columns(2)
-        n_check=cc1.slider("검증 관찰 구간 수",1,3,2,1,key="cc_windows")
-        cc_seed=int(cc2.number_input("노이즈 시드",0,99999,NOISE_SEED_BASE,1,key="cc_seed"))
-        if st.button("일치 검증 실행",key="run_consistency"):
-            seg_now=st.session_state.get("current_actual_df")
-            wins=consistency_windows(seg_now,n_check) if seg_now is not None else []
-            if not wins:
-                st.warning("현재 구간이 너무 짧아(60개 기록 미만) 검증 관찰 구간을 만들 수 없습니다.")
-            else:
-                param_sets=[("현재 슬라이더 값",dict(current))]
-                if result: param_sets.append(("자동 튜닝 추천값",dict(result["best"])))
-                tables=[]
-                with st.spinner("두 경로를 각각 50Hz로 계산하는 중… (실시간 경로는 관찰 구간당 수 초 걸립니다)"):
-                    for wi,w in enumerate(wins):
-                        for name,pars in param_sets:
-                            t_=consistency_check(w,pars,fixed,cc_seed)
-                            t_.insert(0,"파라미터",name); t_.insert(0,"관찰 구간",f"{wi+1} ({len(w)}개 기록, {float(w['elapsed_s'].iloc[-1]-w['elapsed_s'].iloc[0]):.0f}s)")
-                            tables.append(t_)
-                st.session_state["consistency_result"]=pd.concat(tables,ignore_index=True)
-        cres=st.session_state.get("consistency_result")
-        if cres is not None:
-            st.dataframe(cres.round(4),hide_index=True,width="stretch")
-            worst=float(cres["차이(%)"].max())
-            if (cres["판정(≤5%)"]=="통과").all():
-                st.success(f"모든 관찰 구간·파라미터에서 통과했습니다. 최대 차이 {worst:.4f}%")
-            else:
-                st.error(f"허용 차이 5%를 넘는 항목이 있습니다. 최대 차이 {worst:.2f}%")
-            st.download_button("일치 검증 결과 CSV 저장",cres.to_csv(index=False).encode("utf-8-sig"),
-                               file_name="consistency_check.csv",mime="text/csv",key="dl_consistency")
-
-else:
-    # ---------------------------------------------------------------- 5-6 virtual comparison
-    st.divider()
-    with st.expander("가상 파도 대조 실험: 해상상태별 최적 게인 (Hs × Tp)", expanded=False):
-        st.warning("가상 파도는 파도 경사 기반 단순화 모델이며 실선 RAO 모델이 아닙니다. 이 결과는 실제 항해 데이터 결과와 따로 해석해야 합니다.")
-        st.write(f"Hs {', '.join(f'{h:g}' for h in VIRTUAL_HS)} m(WMO 3~6 대표값) × Tp {', '.join(f'{t:g}' for t in VIRTUAL_TP)} s의 16개 조건에서 "
-                 "가상 관찰 구간을 만들고 조건마다 자동 튜닝을 실행합니다. 이어서 각 조건의 게인을 다른 조건에 적용한 regret으로 "
-                 "Hs와 Tp 중 어느 변수가 최적 게인에 더 큰 영향을 주는지 비교합니다.")
-        vopts=tuning_options("virt",expanded=True)
-        v1,v2,v3=st.columns(3)
-        v_trials=int(v1.slider("조건별 탐색 후보 수",16,48,20,4,key="virt_trials"))
-        v_train=int(v2.slider("조건별 학습용 관찰 구간 수",2,6,3,1,key="virt_ntrain"))
-        v_dur=float(v3.select_slider("관찰 구간 길이(s)",[60,120,180,240],value=120,key="virt_dur"))
-        st.caption("흔들림 크기는 기존 가상 모드 프리셋 배율(Hs 0.5/2/4 m → 0.6/2.0/3.5)을 Hs에 대해 보간한 값 × 사이드바 '흔들림 크기 배율'입니다. 파향 25°, 성분 5개.")
-        if st.button("가상 대조 실험 실행",key="run_virtual_bins"):
-            try:
-                bar=st.progress(0.0)
-                st.session_state["virtual_bins"]=run_virtual_analysis(current,fixed,vopts["objective"],vopts["case_fixed"],vopts["kd_log"],
-                                                                      v_trials,v_train,v_dur,gain,vopts["seed"],lambda f,m: bar.progress(min(f,1.0),text=m))
-            except Exception as exc:
-                st.error(f"가상 대조 실험 오류: {type(exc).__name__}: {exc}")
-        vr=st.session_state.get("virtual_bins")
-        if vr:
-            st.info(vr["summary"])
-            st.dataframe(vr["table"].round(4),hide_index=True,width="stretch")
-            tb=vr["table"]
-            for k in ("Kp","Kd","FF"):
-                piv=tb.pivot(index="Hs(m)",columns="Tp(s)",values=k)
-                st.plotly_chart(heatmap(piv.to_numpy(),[f"Tp {c:g}s" for c in piv.columns],[f"Hs {i:g}m" for i in piv.index],
-                                        f"가상 조건별 최적 {k}",k,text_fmt=".3f",colorscale="Blues"),width="stretch",key=f"virt_{k}")
-            st.markdown("**변수별 영향도** (최적 게인의 변화 폭, 탐색 범위 대비 %)")
-            st.dataframe(vr["influence"].round(2),hide_index=True,width="stretch")
-            labels=[f"Hs{h:g}/Tp{t:g}" for h,t in vr["conds"]]
-            st.plotly_chart(heatmap(100*vr["regret"],labels,labels,"가상 조건 전이 regret(%) (행 게인 → 열 조건)","regret(%)",zmin=0,text_fmt=".0f",colorscale="Reds"),width="stretch",key="virt_regret")
-            st.download_button("가상 대조 실험 CSV",tb.to_csv(index=False).encode("utf-8-sig"),file_name="virtual_sea_state_gains.csv",mime="text/csv",key="dl_virt")
-            st.caption("가상 파도는 실선 RAO 모델이 아님. 실제 항해 데이터의 해상상태별 결과와 섞어서 해석하지 마세요.")
 
 with st.expander("모델·데이터 출처와 해석상의 한계"):
     st.markdown("""
