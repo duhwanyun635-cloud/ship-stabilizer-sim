@@ -282,6 +282,55 @@ for c in (dict(servo_model="zoh1", delay_steps=1, alpha=0.998, ki=0.005),
         an = abs(phasor_residual(f, p, DT))
         report(f"V14 닫힌루프 + 바이어스 추정 {c}, {f} Hz", abs(sim-an)/an < 1e-6, f"시뮬 {sim:.7f} vs 해석 {an:.7f}")
 
+# V15 물리 기반 선박 운동 모델 (sea_state.py)
+print("-" * 78)
+import sea_state as ssm
+_P = ssm.default_params(); _C = ssm.coefficients(_P)
+#  (a) 긴 파도 정적 극한: 롤/파경사 → 1 (정횡), 피치/파경사 → 1 (선수)  — 선박이 수면 기울기를 그대로 따라감
+_r = ssm.rao_curves(dict(_P, U_kn=0.0), 90.0, [2000.0])["roll_per_slope"][0]
+_q = ssm.rao_curves(dict(_P, U_kn=0.0), 0.0, [2000.0])["pitch_per_slope"][0]
+report("V15 긴 파도 정적 극한 (롤·피치 / 파경사 → 1)", abs(_r-1) < 1e-3 and abs(_q-1) < 1e-3, f"롤 {_r:.5f}, 피치 {_q:.5f}")
+#  (b) 상자형 수선면 인자 F(x) = 3(sin x − x cos x)/x³ = [∫ y·sin(k y) dy] / [k ∫ y² dy]  (수치 적분과 대조)
+_e = 0.0
+for x in (0.05, 0.3, 1.0, 2.5, 6.0):
+    yy = np.linspace(-0.5, 0.5, 20001); kk = 2*x            # B = 1, x = kB/2
+    num = np.trapezoid(yy*np.sin(kk*yy), yy)/(kk*np.trapezoid(yy*yy, yy))
+    _e = max(_e, abs(num - ssm.box_factor(x)))
+report("V15 수선면 평균 인자 F(x) = 수치 적분", _e < 1e-7, f"최대 차이 {_e:.1e}")
+#  (c) 운동방정식 시간 적분(RK4, dt 0.005 s) = 정상해 합 (같은 방정식을 두 방법으로)
+for beta, U in ((90.0, 0.0), (45.0, 10.0), (150.0, 10.0)):
+    comps = (np.array([0.07, 0.11]), np.array([1.0, 0.6]), np.array([0.3, 1.9]), np.array([0.0, 0.2]))
+    tm = ssm.component_terms(comps, beta, dict(_P, U_kn=U), _C)
+    dt = 0.005; t = np.arange(0, 900, dt)
+    # 입력 u(t) = 유효 파경사 (rad) = Σ Re[i·s·e^{i(−ωe t + φ)}]
+    u_r = (1j*tm["s_roll"][None, :]*np.exp(1j*(-tm["we"][None, :]*t[:, None] + tm["ph"][None, :]))).real.sum(1)
+    u_p = (1j*tm["s_pitch"][None, :]*np.exp(1j*(-tm["we"][None, :]*t[:, None] + tm["ph"][None, :]))).real.sum(1)
+    xr, _ = ssm.integrate_sdof(u_r, _C["w44"], _C["z44"], dt); xp, _ = ssm.integrate_sdof(u_p, _C["w55"], _C["z55"], dt)
+    m = t > 600; an = ssm.response(t[m], tm)
+    er = np.max(np.abs(np.degrees(xr[m]) - an["roll"]))/np.max(np.abs(an["roll"]))
+    ep = np.max(np.abs(np.degrees(xp[m]) - an["pitch"]))/max(np.max(np.abs(an["pitch"])), 1e-12)
+    report(f"V15 운동방정식 시간 적분 = 정상해 (파향 {beta:g}°, 선속 {U:g} kn)", er < 1e-5 and ep < 1e-5, f"상대 오차 롤 {er:.1e}, 피치 {ep:.1e}")
+#  (d) 자유 감쇠: 주기 2π/ωd, 대수감쇠율 → ζ
+t = np.arange(0, 200, 0.001); x, _ = ssm.free_decay(t, 5.0, _C["w44"], _C["z44"])
+Td = ssm.zero_cross_period(t, x, demean=False); _dl, _zd = ssm.log_decrement(t, x)
+Tex = 2*math.pi/(_C["w44"]*math.sqrt(1-_C["z44"]**2))
+report("V15 자유 감쇠 시험: 감쇠 주기·감쇠비", abs(Td-Tex)/Tex < 1e-5 and abs(_zd-_C["z44"]) < 1e-5,
+       f"주기 {Td:.4f} s (이론 {Tex:.4f}), ζ {_zd:.5f} (입력 {_C['z44']:.5f})")
+#  (e) 롤 주기 ↔ GM (IMO 식) 왕복, 그리고 부가관성 자동 결정으로 롤 고유주기 = 실측 13.5 s
+gm = ssm.gm_from_roll_period(13.5, 23.25, 8.5, 133.53); Tb = ssm.roll_period_from_gm(gm, 23.25, 8.5, 133.53)
+report("V15 IMO 롤 주기 식 왕복 + 모델 롤 고유주기 = 실측", abs(Tb-13.5) < 1e-12 and abs(_C["T44"]-13.5) < 1e-9,
+       f"GM {gm:.3f} m → T {Tb:.6f} s, 모델 T44 {_C['T44']:.6f} s")
+#  (f) 각속도·각가속도 = 각도의 수치 미분
+tm = ssm.component_terms(ssm.wave_components_phys(9.0, 3.0, 48, seed=5), 60.0, _P, _C)
+t = np.arange(0, 60, 0.001); r = ssm.response(t, tm)
+dr = np.gradient(r["roll"], t); da = np.gradient(r["roll_rate"], t)
+e1 = np.max(np.abs(dr[5:-5]-r["roll_rate"][5:-5]))/np.max(np.abs(r["roll_rate"])); e2 = np.max(np.abs(da[5:-5]-r["roll_acc"][5:-5]))/np.max(np.abs(r["roll_acc"]))
+report("V15 각속도·각가속도 = 각도 미분", e1 < 1e-5 and e2 < 1e-5, f"상대 오차 {e1:.1e}, {e2:.1e}")
+#  (참고) 실측 보정 결과
+for (lo, hi), n, tp, rm, pm in ssm.AKADEMIK_MEASURED["rms_by_hs"]:
+    a_, b_ = ssm.rms_expected(0.5*(lo+hi), tp, 0.0, _P, headings=range(0, 360, 30))
+    print(f"   V15 (참고) Hs {lo:g}~{hi:g} m: 롤 RMS 실측 {rm:.2f}° / 모델 {a_:.2f}°,  피치 실측 {pm:.2f}° / 모델 {b_:.2f}°")
+
 if len(sys.argv) > 1:
     legacy_check(sys.argv[1])
 
@@ -311,6 +360,17 @@ def batch_check(app_path):
         d = float(r["차이(%)"].max())
         report(f"V13 새 앱 튜닝 루프 = 실시간 루프 ({name}, 노이즈·바이어스·오염 포함)", d < 1e-6,
                f"RMS비 {r['튜닝 평가 RMS비'].iloc[0]:.6f} vs {r['실시간 RMS비'].iloc[0]:.6f}, 차이 {d:.1e}%")
+    # V15 실시간 가상 모드(virtual_motion)와 일괄 계산(virtual_window)이 같은 물리 운동을 만드는지
+    P_ = ns["phys"].default_params(); C_ = ns["phys"].coefficients(P_)
+    w_ = ns["virtual_window"](3.25, 9.0, 0, 60.0, 1.0, 70.0, phys_p=P_)
+    comps = ns["phys"].wave_components_phys(9.0, 3.25, ns["PHYS_COMPONENTS"], seed=123)
+    tm = ns["phys"].component_terms(comps, 70.0, P_, C_)
+    e = 0.0
+    for k in range(0, len(w_["t"]), 97):
+        mo = ns["virtual_motion"](w_["t"][k], comps, 70.0, 1.0, [], tm, C_, P_["imu_h"])
+        e = max(e, abs(mo["roll"] - w_["ship"][0][k]), abs(mo["pitch"] - w_["ship"][1][k]), abs(mo["roll_rate"] - w_["rate"][0][k]),
+                abs(vs.accel_tilt_deg(0.0, mo["ay"]) - w_["acc"][0][k]), abs(vs.accel_tilt_deg(0.0, -mo["ax"]) - w_["acc"][1][k]))
+    report("V15 실시간 가상 모드 = 일괄 계산 (물리 모델, 각도·각속도·가속도 오염)", e < 1e-9, f"최대 차이 {e:.1e}")
     for name, kw in [("1차 ZOH, 지연 1, kᵢ 0.005", dict(servo2=False, servo_model="zoh1", delay_steps=1, ki=0.005)),
                      ("2차, 지연 2, kᵢ 0.01", dict(servo2=True, servo_model="zoh2", delay_steps=2, ki=0.01))]:
         r = ns["consistency_check"](seg, dict(prm, alpha=0.998), dict(base, **kw))
