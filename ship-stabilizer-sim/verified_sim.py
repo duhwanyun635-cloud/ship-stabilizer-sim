@@ -48,6 +48,15 @@ verified_sim.py — 검증 가능한 식만으로 만든 2축(롤·피치) 상�
      기존 방식은 관절이 한 샘플 미래 값으로 기록되어 잔차가 작게 나온다 (V7에서 7자리까지 확인).
      legacy 에서는 상판 각속도도 기존처럼 직전 스텝 평균 관절속도를 쓴다.
 
+  B9 자이로 바이어스 온라인 추정 (ki > 0 일 때만; ki = 0 이면 B6와 완전히 같음)
+     연속형  x̂' = y_u − b̂ + k(y_x − x̂),   b̂' = −(y_x − x̂)/λ      (ki = 1/λ)
+     Mahony·Hamel·Pflimlin, "Complementary filter design on the special orthogonal group SO(3)",
+     44th IEEE CDC-ECC 2005, Appendix A, 식 (22)·(23), 1484쪽 [확인]  — 보완필터 보상기를 C(s) = k + 1/(λs) 로 둔 PI형
+     이산형(B6와 같은 후진 오일러):  ω_c = ω − b̂[k−1]
+                                     θ̂[k] = α(θ̂[k−1] + ω_c·dt) + (1−α)·θ_acc[k]
+                                     b̂[k] = b̂[k−1] − ki·(θ_acc[k] − θ̂[k])·dt
+     D항과 이상적 FF에도 보정된 각속도 ω_c 를 쓴다. 상수 바이어스의 정상 오차 → 0 (V14에서 검산).
+
   B7 성능 지표       RMS비 = RMS(상판각) / RMS(선박각)   (축별, 분모 하한 0.1°) — 기존 앱과 동일 정의
 
 이 엔진에 넣지 않은 것 (근거가 약해서 뺐음)
@@ -71,6 +80,7 @@ DEFAULTS = dict(
     delay_steps=0,                                    # 센서→구동 지연(샘플)
     ff_mode="static",                                 # "static": F_v=Kff, "ideal": F_v=Kff·(1+τs)
     timing="consistent",                              # 기록 시점 (아래 B8 참고)
+    ki=0.0,                                           # 자이로 바이어스 추정 이득 (B9, 0이면 끔)
 )
 
 LEGACY = dict(servo_model="euler1", delay_steps=0, ff_mode="static", timing="legacy")  # 기존 앱 재현용
@@ -119,7 +129,8 @@ def new_state(initial=(0.0, 0.0), seed=7):
     def axis(v):
         return {"base_est": float(v), "plate_est": float(v), "joint": 0.0, "joint_rate": 0.0,
                 "joint_vel": 0.0, "u_prev": 0.0, "queue": [],
-                "base_bias": rng.normal(0, 1), "plate_bias": rng.normal(0, 1)}
+                "base_bias": rng.normal(0, 1), "plate_bias": rng.normal(0, 1),
+                "base_bhat": 0.0, "plate_bhat": 0.0}
     return {"t": 0.0, "roll": axis(initial[0]), "pitch": axis(initial[1]), "rng": rng}
 
 
@@ -158,12 +169,17 @@ def step(state, motion, p, controller_on=True, accel_disturb=0.0, dt=CONTROL_DT)
         # 센서 (난수 순서: gyro_b, acc_b, gyro_p, acc_p)
         gyro_b = ship_rate + p["gyro_bias"]*s["base_bias"] + rng.normal(0, p["gyro_noise"])
         acc_b = accel_tilt_deg(ship, a_h[axis]) + extra[axis] + rng.normal(0, p["acc_noise"])
-        # B6 보완필터 (하부)
+        ki = float(p.get("ki", 0.0))
+        # B6 보완필터 (하부), B9 바이어스 추정: ω_c = ω − b̂[k−1]
+        gyro_b = gyro_b - s["base_bhat"]
         s["base_est"] = p["alpha"]*(s["base_est"] + gyro_b*dt) + (1-p["alpha"])*acc_b
+        s["base_bhat"] = s["base_bhat"] - ki*(acc_b - s["base_est"])*dt
         gyro_p = plate_rate + p["gyro_bias"]*s["plate_bias"] + rng.normal(0, p["gyro_noise"])
         acc_p = accel_tilt_deg(plate, a_h[axis]) + extra[axis] + rng.normal(0, p["acc_noise"])
-        # B6 보완필터 (상판)
+        # B6 보완필터 (상판), B9
+        gyro_p = gyro_p - s["plate_bhat"]
         s["plate_est"] = p["alpha"]*(s["plate_est"] + gyro_p*dt) + (1-p["alpha"])*acc_p
+        s["plate_bhat"] = s["plate_bhat"] - ki*(acc_p - s["plate_est"])*dt
         # B2 제어 법칙: u = −(Kp + Kd s)·y − F_v·v
         if controller_on:
             ffv = s["base_est"]
@@ -245,8 +261,10 @@ def analytic_residual(f, p, dt=CONTROL_DT):
     w = 2*math.pi*f; z = cmath.exp(1j*w*dt); S = 1.0; Ws = 1j*w
     al, kp, kd, kff, tau = p["alpha"], p["kp"], p["kd"], p["ff"], p["tau"]
     d = int(p.get("delay_steps", 0)); model = p.get("servo_model", "zoh1"); legacy = p.get("timing") == "legacy"
-    B = (al*dt*Ws + (1-al)*S)/(1 - al/z)
-    Bff = B + (tau*Ws if p.get("ff_mode") == "ideal" else 0.0)
+    # B9: b̂[k−1] = −(ki·dt/(z−1))·(θ_acc − θ̂)  →  보정 각속도 ω_c = ω + kq·(θ_acc − θ̂),  kq = ki·dt/(z−1)
+    kq = float(p.get("ki", 0.0))*dt/(z - 1)
+    B = (al*dt*Ws + (1-al + al*dt*kq)*S)/(1 - al/z + al*dt*kq)
+    Bff = B + (tau*(Ws + kq*(S - B)) if p.get("ff_mode") == "ideal" else 0.0)
     zd = z**(-d)
     if legacy:
         cJ, cV, cC = (1 - 1/z)/dt, 0.0, 0.0
@@ -257,8 +275,8 @@ def analytic_residual(f, p, dt=CONTROL_DT):
     else:
         cJ, cV, cC = (1 - 1/z)/dt, 0.0, 0.0
     A = np.zeros((4, 4), complex); b = np.zeros(4, complex)
-    A[0] = [1 - al/z, -(al*dt*cJ) - (1-al), -al*dt*cV, -al*dt*cC]; b[0] = al*dt*Ws + (1-al)*S
-    A[1] = [kp, kd*cJ, kd*cV, 1 + kd*cC]; b[1] = -kff*Bff - kd*Ws
+    A[0] = [1 - al/z + al*dt*kq, -(al*dt*cJ) - (1-al) - al*dt*kq, -al*dt*cV, -al*dt*cC]; b[0] = al*dt*Ws + (1-al + al*dt*kq)*S
+    A[1] = [kp - kd*kq, kd*(cJ + kq), kd*cV, 1 + kd*cC]; b[1] = -kff*Bff - kd*Ws - kd*kq*S
     if model == "zoh1":
         a = math.exp(-dt/tau); A[2] = [0, z - a, 0, -(1-a)*zd]; A[3] = [0, 0, 1, 0]
     elif model == "euler1":
@@ -307,11 +325,19 @@ def self_test(p_user: dict | None = None):
     # 6) 닫힌루프 전체: 현재 화면 설정(센서 이상화)으로 0.15 Hz 정현파
     pu = dict(p_user or {}); pu.update(base)
     p = params(**{k: v for k, v in pu.items() if k in DEFAULTS})
-    f = 0.15; T = 80.0; n = int(T/CONTROL_DT); t = np.arange(n)*CONTROL_DT; A = 2.0
+    f = 0.15; T = 80.0 if not p.get("ki") else 500.0   # 바이어스 추정의 느린 과도가 사라질 때까지
+    n = int(T/CONTROL_DT); t = np.arange(n)*CONTROL_DT; A = 2.0
     th = A*np.sin(2*math.pi*f*t); om = A*2*math.pi*f*np.cos(2*math.pi*f*t); z0 = np.zeros(n)
     o = run(th, z0, om, z0, p)
-    m = t > 40; M = np.column_stack([np.sin(2*math.pi*f*t[m]), np.cos(2*math.pi*f*t[m]), np.ones(m.sum())])
+    m = t > T/2; M = np.column_stack([np.sin(2*math.pi*f*t[m]), np.cos(2*math.pi*f*t[m]), np.ones(m.sum())])
     c, *_ = np.linalg.lstsq(M, o["plate_roll"][m], rcond=None); amp = math.hypot(c[0], c[1])/A
     an = abs(analytic_residual(f, p))
     out.append(("닫힌루프 잔차 0.15 Hz (현재 설정)", "A&M 그림 12.13 구조의 z 영역 해", amp, an, abs(amp-an)/max(an, 1e-12) < 1e-4))
+    # 7) 바이어스 추정: 정지 상태에서 상수 바이어스 0.3°/s 의 정상 오차 → 0 (끄면 α·b·dt/(1−α))
+    ki_ = float(pu.get("ki", 0.0)) or 0.005; al = 0.998
+    p = params(alpha=al, ki=ki_, gyro_bias=0.3, gyro_noise=0.0, acc_noise=0.0); st = new_state((0, 0)); st["roll"]["base_bias"] = 1.0
+    for _ in range(int(600/CONTROL_DT)):
+        r = step(st, Z, p, False)
+    out.append((f"바이어스 추정 (ki={ki_:g}): 정상 오차 → 0, 추정 b̂ → 0.3°/s", "Mahony 외 2005 부록 A 식 (22)·(23)",
+                r["est_roll"], 0.0, abs(r["est_roll"]) < 1e-6 and abs(st["roll"]["base_bhat"] - 0.3) < 1e-6))
     return out

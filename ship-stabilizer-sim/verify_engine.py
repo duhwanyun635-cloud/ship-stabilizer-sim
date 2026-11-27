@@ -55,9 +55,12 @@ def phasor_residual(f, p, dt):
     S = 1.0; Ws = 1j*w
     al, kp, kd, kff, tau = p["alpha"], p["kp"], p["kd"], p["ff"], p["tau"]
     d = int(p["delay_steps"]); model = p["servo_model"]
-    # 하부 보완필터: B(1 − α/z) = α·dt·Ωs + (1−α)·S
-    B = (al*dt*Ws + (1-al)*S)/(1 - al/z)
-    Bff = B + (tau*Ws if p["ff_mode"] == "ideal" else 0.0)
+    # B9 바이어스 추정: b̂[k] = b̂[k−1] − ki·dt·e[k],  e = θ_acc − θ̂  →  b̂[k−1] = −ki·dt/(z−1)·e
+    #   보정 각속도 ω_c = ω − b̂[k−1] = ω + g·e,  g = ki·dt/(z−1)   (ki = 0 이면 g = 0 → 기존 식)
+    g = p.get("ki", 0.0)*dt/(z - 1)
+    # 하부 보완필터: B(1 − α/z) = α·dt·(Ωs + g(S − B)) + (1−α)·S
+    B = (al*dt*(Ws + g*S) + (1-al)*S)/(1 - al/z + al*dt*g)
+    Bff = B + (tau*(Ws + g*(S - B)) if p["ff_mode"] == "ideal" else 0.0)
     zd = z**(-d)
     # 미지수 x = [E, J, V, C]  (E: 상판 추정, J: 관절, V: 관절 속도 상태, C: 명령)
     # 관절 순간 각속도 Jd = cJ·J + cV·V + cC·C
@@ -71,12 +74,12 @@ def phasor_residual(f, p, dt):
     else:
         cJ, cV, cC = (1 - 1/z)/dt, 0.0, 0.0             # (j[k] − j[k−1])/dt
     A = np.zeros((4, 4), complex); b = np.zeros(4, complex)
-    # (1) 상판 보완필터: E(1−α/z) = α·dt·(Ωs + Jd) + (1−α)(S + J)
-    A[0] = [1 - al/z, -(al*dt*cJ) - (1-al), -al*dt*cV, -al*dt*cC]
-    b[0] = al*dt*Ws + (1-al)*S
-    # (2) 제어: C = −Kff·Bff − Kp·E − Kd·(Ωs + Jd)
-    A[1] = [kp, kd*cJ, kd*cV, 1 + kd*cC]
-    b[1] = -kff*Bff - kd*Ws
+    # (1) 상판 보완필터: E(1−α/z) = α·dt·(Ωs + Jd + g(S + J − E)) + (1−α)(S + J)
+    A[0] = [1 - al/z + al*dt*g, -(al*dt*cJ) - (1-al) - al*dt*g, -al*dt*cV, -al*dt*cC]
+    b[0] = al*dt*(Ws + g*S) + (1-al)*S
+    # (2) 제어: C = −Kff·Bff − Kp·E − Kd·(Ωs + Jd + g(S + J − E))
+    A[1] = [kp - kd*g, kd*(cJ + g), kd*cV, 1 + kd*cC]
+    b[1] = -kff*Bff - kd*(Ws + g*S)
     # (3),(4) 서보
     if model == "zoh1":
         a = math.exp(-dt/tau)
@@ -259,6 +262,26 @@ def legacy_check(app_path):
                e < 1e-9, f"60초 최대 차이 {e:.1e}° → 기존 결과(0.497, 0.383)를 이 엔진으로 재현 가능")
 
 
+# V14 바이어스 추정 (Mahony 외 2005 부록 A 식 22·23의 이산형, verified_sim B9)
+print("-" * 78)
+#  (a) 끄면(ki=0) 기존 엔진과 비트 단위로 같다 — V5·V7이 그대로 통과하는 것으로 확인
+#  (b) 상수 바이어스의 정상 오차 → 0 (적분기의 최종값 정리), 추정값 b̂ → 실제 바이어스
+for al, ki in ((0.987, 0.01), (0.998, 0.005)):
+    p = vs.params(alpha=al, ki=ki, gyro_bias=0.3); st = vs.new_state((0, 0)); st["roll"]["base_bias"] = 1.0
+    for k in range(int(1500/DT)):
+        r = vs.step(st, {"roll": 0, "pitch": 0, "roll_rate": 0, "pitch_rate": 0}, p, False, 0.0)
+    report(f"V14 바이어스 추정 정상 오차 → 0 (α={al}, ki={ki})", abs(r["est_roll"]) < 1e-6 and abs(st["roll"]["base_bhat"]-0.3) < 1e-6,
+           f"추정각 오차 {r['est_roll']:.2e}° (끄면 {al*0.3*DT/(1-al):.4f}°), b̂ = {st['roll']['base_bhat']:.6f}°/s (실제 0.3)")
+#  (c) 닫힌루프 전체: 시간 적분 = z 영역 해석해 (바이어스 추정 포함)
+for c in (dict(servo_model="zoh1", delay_steps=1, alpha=0.998, ki=0.005),
+          dict(servo_model="zoh2", delay_steps=1, alpha=0.996, ki=0.01),
+          dict(servo_model="zoh1", delay_steps=0, alpha=0.998, ki=0.005, ff_mode="ideal")):
+    for f in (0.05, 0.2):
+        p = ideal(**c)
+        sim = sim_single_axis(p, f, T=900.0, settle=600.0)
+        an = abs(phasor_residual(f, p, DT))
+        report(f"V14 닫힌루프 + 바이어스 추정 {c}, {f} Hz", abs(sim-an)/an < 1e-6, f"시뮬 {sim:.7f} vs 해석 {an:.7f}")
+
 if len(sys.argv) > 1:
     legacy_check(sys.argv[1])
 
@@ -287,6 +310,12 @@ def batch_check(app_path):
         r = ns["consistency_check"](seg, prm, dict(base, **kw))
         d = float(r["차이(%)"].max())
         report(f"V13 새 앱 튜닝 루프 = 실시간 루프 ({name}, 노이즈·바이어스·오염 포함)", d < 1e-6,
+               f"RMS비 {r['튜닝 평가 RMS비'].iloc[0]:.6f} vs {r['실시간 RMS비'].iloc[0]:.6f}, 차이 {d:.1e}%")
+    for name, kw in [("1차 ZOH, 지연 1, kᵢ 0.005", dict(servo2=False, servo_model="zoh1", delay_steps=1, ki=0.005)),
+                     ("2차, 지연 2, kᵢ 0.01", dict(servo2=True, servo_model="zoh2", delay_steps=2, ki=0.01))]:
+        r = ns["consistency_check"](seg, dict(prm, alpha=0.998), dict(base, **kw))
+        d = float(r["차이(%)"].max())
+        report(f"V14 새 앱 튜닝 루프 = 실시간 루프 ({name}, α 0.998)", d < 1e-6,
                f"RMS비 {r['튜닝 평가 RMS비'].iloc[0]:.6f} vs {r['실시간 RMS비'].iloc[0]:.6f}, 차이 {d:.1e}%")
 
 
